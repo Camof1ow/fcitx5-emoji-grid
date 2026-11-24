@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+# 이모지 그리드 창. 키보드를 가져가지 않는 layer-shell 창이라 입력칸 포커스가 그대로 남는다.
+# fcitx5 emojigrid 애드온의 VisibilityChanged 신호로 열고 닫고, 클릭한 이모지는 Commit 으로 보낸다.
+import json
+import os
+
+import gi
+
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gtk4LayerShell", "1.0")
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gtk4LayerShell as LayerShell  # noqa: E402
+
+BUS_NAME = "org.fcitx.Fcitx5"
+OBJECT_PATH = "/emojigrid"
+INTERFACE = "org.fcitx.Fcitx.EmojiGrid1"
+SKIN_TONES = {chr(c) for c in range(0x1F3FB, 0x1F400)}
+STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+RECENT_FILE = os.path.join(STATE_HOME, "emoji-grid", "recent.json")
+RECENT_MAX = 36
+# (탭 아이콘, emoji-test.txt 의 group 이름). None 은 최근 사용.
+TABS = [
+    ("🕘", None),
+    ("😀", "Smileys & Emotion"),
+    ("👋", "People & Body"),
+    ("🐻", "Animals & Nature"),
+    ("🍔", "Food & Drink"),
+    ("✈️", "Travel & Places"),
+    ("⚽", "Activities"),
+    ("💡", "Objects"),
+    ("🔣", "Symbols"),
+    ("🏁", "Flags"),
+]
+CSS = """
+.emoji { font-size: 18px; padding: 0; min-width: 32px; min-height: 32px; }
+.tab { font-size: 14px; padding: 1px 3px; min-width: 0; }
+"""
+
+
+def load_groups(path):
+    # fully-qualified 만, 피부색 변형은 뺀다(그리드가 너무 길어짐).
+    groups, group = {}, None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("# group: "):
+                group = line[len("# group: "):].strip()
+                groups.setdefault(group, [])
+            elif not line.startswith("#") and "; fully-qualified" in line:
+                emoji = line.split("#", 1)[1].split()[0]
+                if not SKIN_TONES & set(emoji):
+                    groups[group].append(emoji)
+    return groups
+
+
+def load_recent():
+    try:
+        with open(RECENT_FILE, encoding="utf-8") as f:
+            return [e for e in json.load(f) if isinstance(e, str)][:RECENT_MAX]
+    except (OSError, ValueError):
+        return []
+
+
+def save_recent(recent):
+    os.makedirs(os.path.dirname(RECENT_FILE), exist_ok=True)
+    tmp = RECENT_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(recent, f, ensure_ascii=False)
+    os.replace(tmp, RECENT_FILE)
+
+
+class Picker(Gtk.ApplicationWindow):
+    def __init__(self, app, bus, groups):
+        super().__init__(application=app, title="Emoji Grid")
+        self.bus = bus
+        self.groups = groups
+        self.recent = load_recent()
+        self.pages = {}
+
+        LayerShell.init_for_window(self)
+        LayerShell.set_namespace(self, "emoji-grid")
+        LayerShell.set_layer(self, LayerShell.Layer.OVERLAY)
+        LayerShell.set_keyboard_mode(self, LayerShell.KeyboardMode.NONE)
+        for edge in (LayerShell.Edge.BOTTOM, LayerShell.Edge.RIGHT):
+            LayerShell.set_anchor(self, edge, True)
+            LayerShell.set_margin(self, edge, 24)
+        self.set_default_size(320, 340)
+
+        self.stack = Gtk.Stack(vexpand=True)
+        tabs = Gtk.Box(spacing=2, margin_start=6, margin_end=6, margin_top=6)
+        first = None
+        self.tab_buttons = {}
+        for icon, group in TABS:
+            button = Gtk.ToggleButton(label=icon, focus_on_click=False, css_classes=["flat", "tab"])
+            button.set_group(first)
+            first = first or button
+            button.connect("toggled", self.on_tab, group)
+            tabs.append(button)
+            self.tab_buttons[group] = button
+        close = Gtk.Button(label="✕", focus_on_click=False, hexpand=True, halign=Gtk.Align.END,
+                           css_classes=["flat", "tab"])
+        close.connect("clicked", lambda _: self.call("Hide"))
+        tabs.append(close)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(tabs)
+        box.append(self.stack)
+        self.set_child(box)
+
+    def call(self, method, params=None):
+        self.bus.call(BUS_NAME, OBJECT_PATH, INTERFACE, method, params, None,
+                      Gio.DBusCallFlags.NONE, -1, None, None, None)
+
+    def build_page(self, emojis):
+        flow = Gtk.FlowBox(homogeneous=True, selection_mode=Gtk.SelectionMode.NONE,
+                           min_children_per_line=8, max_children_per_line=8,
+                           valign=Gtk.Align.START, margin_start=6, margin_end=6)
+        for emoji in emojis:
+            button = Gtk.Button(label=emoji, focus_on_click=False, css_classes=["flat", "emoji"])
+            button.connect("clicked", self.on_emoji, emoji)
+            flow.append(button)
+        return Gtk.ScrolledWindow(child=flow, hscrollbar_policy=Gtk.PolicyType.NEVER)
+
+    def show_tab(self, group):
+        # 최근 사용 탭은 열 때마다 새로 그린다(고른 순서가 바뀌므로).
+        name = group or "recent"
+        if group is None and name in self.pages:
+            self.stack.remove(self.pages.pop(name))
+        if name not in self.pages:
+            self.pages[name] = self.build_page(self.recent if group is None else self.groups.get(group, []))
+            self.stack.add_named(self.pages[name], name)
+        self.stack.set_visible_child_name(name)
+
+    def on_tab(self, button, group):
+        if button.get_active():
+            self.show_tab(group)
+
+    def on_emoji(self, _button, emoji):
+        self.call("Commit", GLib.Variant("(s)", (emoji,)))
+        self.recent = [emoji] + [e for e in self.recent if e != emoji][: RECENT_MAX - 1]
+        save_recent(self.recent)
+
+    def open(self):
+        group = None if self.recent else TABS[1][1]
+        button = self.tab_buttons[group]
+        if button.get_active():
+            self.show_tab(group)
+        else:
+            button.set_active(True)
+        self.set_visible(True)
+
+
+def main():
+    groups = load_groups(os.environ["EMOJI_TEST"])
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    app = Gtk.Application(application_id="org.fcitx.EmojiGridUI")
+
+    def on_activate(app):
+        provider = Gtk.CssProvider()
+        provider.load_from_string(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        picker = Picker(app, bus, groups)
+        app.hold()
+
+        def on_visibility(_conn, _sender, _path, _iface, _signal, params):
+            if params.unpack()[0]:
+                picker.open()
+            else:
+                picker.set_visible(False)
+
+        bus.signal_subscribe(BUS_NAME, INTERFACE, "VisibilityChanged", OBJECT_PATH, None,
+                             Gio.DBusSignalFlags.NONE, on_visibility)
+
+    app.connect("activate", on_activate)
+    app.run(None)
+
+
+if __name__ == "__main__":
+    main()
