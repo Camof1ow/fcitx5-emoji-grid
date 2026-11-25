@@ -4,11 +4,12 @@
   # 시스템(/etc/nixos/flake.lock)과 같은 nixpkgs. 돌고 있는 fcitx5 와 같은 빌드에 링크해야 애드온이 로드된다.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/c59305bab2065cfecc4944690d9eedbb56f3a9fa";
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs }: {
+    packages = nixpkgs.lib.genAttrs [ "aarch64-linux" "x86_64-linux" ] (system:
     let
-      pkgs = nixpkgs.legacyPackages.aarch64-linux;
+      pkgs = nixpkgs.legacyPackages.${system};
     in {
-      packages.aarch64-linux.default = pkgs.stdenv.mkDerivation {
+      default = pkgs.stdenv.mkDerivation {
         pname = "fcitx5-emoji-grid";
         version = "0.1";
         src = ./.;
@@ -29,5 +30,6 @@
           )
         '';
       };
-    };
+    });
+  };
 }

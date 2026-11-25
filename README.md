@@ -108,5 +108,5 @@ fcitx5 -r -d
 - 피부색 변형 이모지는 뺐습니다.
 - 최근 사용 목록은 `~/.local/state/emoji-grid/recent.json`에 저장됩니다(최대 36개).
 - 창 위치는 화면 오른쪽 아래로 고정입니다.
-- `flake.nix`는 `aarch64-linux`만 정의합니다.
+- `flake.nix`는 `aarch64-linux`와 `x86_64-linux`를 정의합니다.
 - 이모지 데이터는 nixpkgs `unicode-emoji`의 `emoji-test.txt`를 씁니다.
