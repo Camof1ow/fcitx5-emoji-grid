@@ -13,6 +13,7 @@
 #include <fcitx/instance.h>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -27,6 +28,7 @@ public:
     bool isOpen();
 
     FCITX_OBJECT_VTABLE_SIGNAL(visibilityChanged, "VisibilityChanged", "b");
+    FCITX_OBJECT_VTABLE_SIGNAL(key, "Key", "s");
 
 private:
     EmojiGrid *parent_;
@@ -60,6 +62,10 @@ public:
                            keyEvent.key().check(FcitxKey_Escape)) {
                     setOpen(false);
                     keyEvent.filterAndAccept();
+                } else if (const char *name = open_ ? navName(keyEvent.key()) : nullptr) {
+                    // 그리드 창은 키보드를 받지 않으므로 이동·선택 키를 여기서 가로채 UI에 넘긴다.
+                    service_.key(name);
+                    keyEvent.filterAndAccept();
                 }
             });
     }
@@ -81,6 +87,26 @@ public:
     }
 
     bool isOpen() const { return open_; }
+
+    static const char *navName(const fcitx::Key &key) {
+        static const std::pair<fcitx::Key, const char *> keys[] = {
+            {fcitx::Key(FcitxKey_Up), "Up"},
+            {fcitx::Key(FcitxKey_Down), "Down"},
+            {fcitx::Key(FcitxKey_Left), "Left"},
+            {fcitx::Key(FcitxKey_Right), "Right"},
+            {fcitx::Key(FcitxKey_Return), "Enter"},
+            {fcitx::Key(FcitxKey_KP_Enter), "Enter"},
+            {fcitx::Key(FcitxKey_Tab), "Tab"},
+            {fcitx::Key(FcitxKey_ISO_Left_Tab, fcitx::KeyState::Shift), "ShiftTab"},
+            {fcitx::Key(FcitxKey_Tab, fcitx::KeyState::Shift), "ShiftTab"},
+        };
+        for (const auto &[navKey, name] : keys) {
+            if (key.check(navKey)) {
+                return name;
+            }
+        }
+        return nullptr;
+    }
 
 private:
     fcitx::Instance *instance_;

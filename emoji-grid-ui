@@ -19,6 +19,7 @@ SKIN_TONES = {chr(c) for c in range(0x1F3FB, 0x1F400)}
 STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
 RECENT_FILE = os.path.join(STATE_HOME, "emoji-grid", "recent.json")
 RECENT_MAX = 36
+COLUMNS = 8
 # (탭 아이콘, emoji-test.txt 의 group 이름). None 은 최근 사용.
 TABS = [
     ("🕘", None),
@@ -35,6 +36,7 @@ TABS = [
 CSS = """
 .emoji { font-size: 18px; padding: 0; min-width: 32px; min-height: 32px; }
 .tab { font-size: 14px; padding: 1px 3px; min-width: 0; }
+flowboxchild:selected { background: alpha(@accent_bg_color, 0.45); border-radius: 6px; }
 """
 
 
@@ -76,6 +78,8 @@ class Picker(Gtk.ApplicationWindow):
         self.groups = groups
         self.recent = load_recent()
         self.pages = {}
+        self.flows = {}  # 페이지 이름 → (FlowBox, 이모지 목록)
+        self.selected = 0
 
         LayerShell.init_for_window(self)
         LayerShell.set_namespace(self, "emoji-grid")
@@ -111,14 +115,15 @@ class Picker(Gtk.ApplicationWindow):
         self.bus.call(BUS_NAME, OBJECT_PATH, INTERFACE, method, params, None,
                       Gio.DBusCallFlags.NONE, -1, None, None, None)
 
-    def build_page(self, emojis):
-        flow = Gtk.FlowBox(homogeneous=True, selection_mode=Gtk.SelectionMode.NONE,
-                           min_children_per_line=8, max_children_per_line=8,
+    def build_page(self, name, emojis):
+        flow = Gtk.FlowBox(homogeneous=True, selection_mode=Gtk.SelectionMode.SINGLE,
+                           min_children_per_line=COLUMNS, max_children_per_line=COLUMNS,
                            valign=Gtk.Align.START, margin_start=6, margin_end=6)
         for emoji in emojis:
             button = Gtk.Button(label=emoji, focus_on_click=False, css_classes=["flat", "emoji"])
             button.connect("clicked", self.on_emoji, emoji)
             flow.append(button)
+        self.flows[name] = (flow, emojis)
         return Gtk.ScrolledWindow(child=flow, hscrollbar_policy=Gtk.PolicyType.NEVER)
 
     def show_tab(self, group):
@@ -127,9 +132,39 @@ class Picker(Gtk.ApplicationWindow):
         if group is None and name in self.pages:
             self.stack.remove(self.pages.pop(name))
         if name not in self.pages:
-            self.pages[name] = self.build_page(self.recent if group is None else self.groups.get(group, []))
+            self.pages[name] = self.build_page(name, self.recent if group is None else self.groups.get(group, []))
             self.stack.add_named(self.pages[name], name)
         self.stack.set_visible_child_name(name)
+        self.select(0)
+
+    def select(self, index):
+        flow, emojis = self.flows[self.stack.get_visible_child_name()]
+        if not emojis:
+            return
+        self.selected = max(0, min(index, len(emojis) - 1))
+        child = flow.get_child_at_index(self.selected)
+        flow.select_child(child)
+        ok, bounds = child.compute_bounds(flow)
+        if ok:
+            adj = flow.get_parent().get_vadjustment()  # Viewport 가 FlowBox 를 감싼다.
+            top, bottom = bounds.get_y(), bounds.get_y() + bounds.get_height()
+            if top < adj.get_value():
+                adj.set_value(top)
+            elif bottom > adj.get_value() + adj.get_page_size():
+                adj.set_value(bottom - adj.get_page_size())
+
+    def on_key(self, name):
+        if name in ("Tab", "ShiftTab"):
+            groups = [group for _, group in TABS]
+            current = next(g for g, b in self.tab_buttons.items() if b.get_active())
+            step = 1 if name == "Tab" else -1
+            self.tab_buttons[groups[(groups.index(current) + step) % len(groups)]].set_active(True)
+        elif name == "Enter":
+            _, emojis = self.flows[self.stack.get_visible_child_name()]
+            if emojis:
+                self.on_emoji(None, emojis[self.selected])
+        else:
+            self.select(self.selected + {"Left": -1, "Right": 1, "Up": -COLUMNS, "Down": COLUMNS}[name])
 
     def on_tab(self, button, group):
         if button.get_active():
@@ -171,6 +206,8 @@ def main():
 
         bus.signal_subscribe(BUS_NAME, INTERFACE, "VisibilityChanged", OBJECT_PATH, None,
                              Gio.DBusSignalFlags.NONE, on_visibility)
+        bus.signal_subscribe(BUS_NAME, INTERFACE, "Key", OBJECT_PATH, None, Gio.DBusSignalFlags.NONE,
+                             lambda *args: picker.on_key(args[-1].unpack()[0]))
 
     app.connect("activate", on_activate)
     app.run(None)

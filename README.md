@@ -3,6 +3,7 @@
 Windows `Win+;` 이모지 패널처럼 쓰는 Wayland용 이모지 그리드 선택기입니다.
 
 - `Super+;`로 열고 이모지를 클릭하면 입력칸에 바로 들어갑니다.
+- 키보드로도 고를 수 있습니다. 방향키로 칸을 옮기고 `Enter`로 입력합니다. `Tab`/`Shift+Tab`은 카테고리 탭을 바꿉니다.
 - 창이 열린 채로 여러 개를 연달아 고를 수 있습니다. 닫을 때는 `Esc`를 누르거나 `✕`를 클릭합니다.
 - 입력칸 포커스가 옮겨 가지 않습니다. 입력은 fcitx5 입력기를 거치므로 클립보드도 바뀌지 않습니다.
 
@@ -18,8 +19,8 @@ Windows `Win+;` 이모지 패널처럼 쓰는 Wayland용 이모지 그리드 선
 
 | 구성 | 하는 일 |
 |---|---|
-| `emojigrid` (fcitx5 애드온, C++) | `Super+;`로 창을 열고 닫습니다. 창이 열려 있으면 `Esc`로 닫습니다. D-Bus `Commit`으로 받은 문자열을 입력기 경로(`commitString`)로 입력칸에 넣습니다. |
-| `emoji-grid-ui` (Python GTK4) | 키보드를 가져가지 않는 layer-shell 창에 그리드를 그립니다. 클릭한 이모지를 애드온에 보냅니다. |
+| `emojigrid` (fcitx5 애드온, C++) | `Super+;`로 창을 열고 닫습니다. 창이 열려 있으면 `Esc`로 닫고, 방향키·`Enter`·`Tab`·`Shift+Tab`을 가로채 `Key` 신호로 UI에 넘깁니다. D-Bus `Commit`으로 받은 문자열을 입력기 경로(`commitString`)로 입력칸에 넣습니다. |
+| `emoji-grid-ui` (Python GTK4) | 키보드를 가져가지 않는 layer-shell 창에 그리드를 그립니다. 클릭하거나 `Enter`로 고른 이모지를 애드온에 보냅니다. |
 
 ```mermaid
 sequenceDiagram
@@ -29,7 +30,11 @@ sequenceDiagram
     participant A as 입력칸
     K->>F: Super+;
     F->>U: VisibilityChanged(true)
-    U->>F: Commit("😀") (클릭)
+    K->>F: → / ↓
+    F->>U: Key("Right") / Key("Down")
+    K->>F: Enter
+    F->>U: Key("Enter")
+    U->>F: Commit("😀")
     F->>A: commitString("😀")
     K->>F: Esc
     F->>U: VisibilityChanged(false)
@@ -43,6 +48,7 @@ D-Bus 인터페이스는 `org.fcitx.Fcitx5`의 `/emojigrid` 경로에 있는 `or
 | `Hide()` | 메서드 | 창 닫기 |
 | `IsOpen() → b` | 메서드 | 창이 열려 있는지 |
 | `VisibilityChanged(b)` | 신호 | 창 열림/닫힘 |
+| `Key(s)` | 신호 | 창이 열린 동안 누른 키: `Up` `Down` `Left` `Right` `Enter` `Tab` `ShiftTab` |
 
 ## 필요한 것
 
